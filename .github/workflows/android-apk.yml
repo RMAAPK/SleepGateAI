@@ -1,0 +1,68 @@
+name: Build and smoke-test Android APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
+
+      - name: Build debug APK
+        run: gradle --no-daemon assembleDebug
+
+      - name: Smoke-test app on Android emulator
+        uses: ReactiveCircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          script: |
+            adb install -r app/build/outputs/apk/debug/app-debug.apk
+            adb shell am start -W -n com.sleepgate.personal/.MainActivity
+            sleep 5
+            if [ -z "$(adb shell pidof com.sleepgate.personal | tr -d '\r')" ]; then
+              adb logcat -d -s AndroidRuntime:E
+              exit 1
+            fi
+            adb logcat -d -s AndroidRuntime:E > /tmp/sleepgate-androidruntime.log
+            if grep -q "FATAL EXCEPTION" /tmp/sleepgate-androidruntime.log; then
+              cat /tmp/sleepgate-androidruntime.log
+              exit 1
+            fi
+
+      - name: Upload APK artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SleepGateAI-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: warn
+          retention-days: 7
